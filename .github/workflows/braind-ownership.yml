@@ -1,0 +1,50 @@
+# BrAIn.D ownership check (docs/kiro-crew.md G1/G3). Installed when this
+# initiative was published; lives at .github/workflows/braind-ownership.yml.
+# Make it a required status check on main, with auto-merge allowed and no
+# human review required: syncs of your own nodes then merge in seconds,
+# while changes to someone else's node are blocked.
+name: braind-ownership
+
+on:
+  # pull_request_target runs this workflow, .braind/tools/braind-ownership.cjs
+  # and people.json exactly as they are on main, never the copies in the PR
+  # being checked, so a PR can't weaken the check or add its own author to
+  # a team. Nothing from the PR is executed: it's only read with `git show`.
+  pull_request_target:
+    branches: [main]
+  # Fallback for direct pushes (no PR): flags a violation after the fact.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  braind-ownership:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check the pull request against node ownership
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          git fetch --no-tags origin "pull/$PR_NUMBER/head:braind-pr-head"
+          node .braind/tools/braind-ownership.cjs \
+            --base "$(git merge-base "$BASE_SHA" braind-pr-head)" \
+            --head braind-pr-head \
+            --author-host "$AUTHOR"
+      - name: Check a direct push to main
+        if: github.event_name == 'push'
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          AUTHOR: ${{ github.actor }}
+        run: node .braind/tools/braind-ownership.cjs --base "$BEFORE" --head "$AFTER" --author-host "$AUTHOR"

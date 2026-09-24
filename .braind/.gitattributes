@@ -1,0 +1,4 @@
+# BrAIn.D: append-only records keep both sides' lines on merge (G19)
+nodes/*/decisions.md merge=union
+nodes/*/interview.md merge=union
+nodes/*/discoveries.md merge=union

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "name": "Credit card initiative",
+  "rootId": "credit-card-initiative-85a37a",
+  "createdAt": "2026-09-24T00:39:42.645Z",
+  "mode": "normal",
+  "sync": {
+    "mode": "pr",
+    "host": "github",
+    "branch": "main"
+  }
+}

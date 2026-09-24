@@ -1,0 +1,13 @@
+# BrAIn.D: per-machine and per-person state (docs/kiro-crew.md G5)
+local/
+.ai-mind.lock
+*.tmp-*
+# Generated or session-local files inside each node
+nodes/*/.aimind-*
+nodes/*/CLAUDE.md
+nodes/*/AGENTS.md
+nodes/*/.claude/
+nodes/*/.kiro/
+nodes/*/memory/
+nodes/*/agents/
+nodes/*/reference/

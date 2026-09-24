@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "people": [
+    {
+      "alias": "pthiruna23",
+      "name": "Pradeep",
+      "emails": [
+        "pthiruna23@gmail.com"
+      ],
+      "hostUsername": "pt-23"
+    },
+    {
+      "alias": "raj",
+      "name": "Raj (test)",
+      "emails": [
+        "raj@example.invalid"
+      ]
+    }
+  ],
+  "teams": [
+    {
+      "alias": "risk",
+      "name": "Risk",
+      "members": [
+        "raj"
+      ]
+    }
+  ]
+}
