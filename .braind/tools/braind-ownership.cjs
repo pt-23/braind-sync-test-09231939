@@ -30,6 +30,73 @@ var import_child_process = require("child_process");
 var import_fs = __toESM(require("fs"));
 var import_path = __toESM(require("path"));
 
+// src/shared/discussion.ts
+var THREADS_DIR = "threads";
+var QUESTION_FILE = "000-question.md";
+var FM_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
+function parseFrontMatter(text) {
+  const m = text.replace(/\r\n/g, "\n").match(FM_RE);
+  if (!m) return { data: {}, body: text.trim() };
+  const data = {};
+  for (const line of m[1].split("\n")) {
+    const kv = line.match(/^([A-Za-z][\w-]*):\s*(.*)$/);
+    if (!kv) continue;
+    const raw = kv[2].trim();
+    if (raw.startsWith("[") && raw.endsWith("]")) {
+      data[kv[1]] = raw.slice(1, -1).split(",").map((s) => unquote(s.trim())).filter(Boolean);
+    } else {
+      data[kv[1]] = unquote(raw);
+    }
+  }
+  return { data, body: m[2].trim() };
+}
+function unquote(s) {
+  return s.length >= 2 && (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'")) ? s.slice(1, -1) : s;
+}
+var str = (v) => Array.isArray(v) ? v.join(", ") : v ?? "";
+var list = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((a) => a.replace(/^@/, ""));
+function parseQuestion(text) {
+  const { data, body } = parseFrontMatter(text);
+  const section = (name) => {
+    const m = body.match(new RegExp(`^## ${name}\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, "m"));
+    return m ? m[1].trim() || null : null;
+  };
+  const question = body.split(/^## /m)[0].trim();
+  return {
+    from: str(data.from).replace(/^@/, ""),
+    to: list(data.to),
+    askedFrom: str(data.askedFrom) || null,
+    createdAt: str(data.createdAt),
+    title: str(data.title) || question.split("\n")[0].slice(0, 120),
+    body: question,
+    context: section("Context"),
+    recommended: section("Recommended answer"),
+    kind: str(data.kind) || null
+  };
+}
+function parseReply(file, text) {
+  const { data, body } = parseFrontMatter(text);
+  const status = str(data.status);
+  return {
+    file,
+    from: str(data.from).replace(/^@/, "") || aliasFromPostFile(file) || "",
+    at: str(data.at) || timeFromPostFile(file) || "",
+    body,
+    status: status === "resolved" || status === "reopened" ? status : null,
+    duplicateOf: str(data.duplicateOf) || null
+  };
+}
+var POST_FILE_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d{3})?Z)-([a-z0-9][a-z0-9_-]*)\.md$/;
+function aliasFromPostFile(file) {
+  return file.match(POST_FILE_RE)?.[2] ?? null;
+}
+function timeFromPostFile(file) {
+  const t = file.match(POST_FILE_RE)?.[1];
+  if (!t) return null;
+  const m = t.match(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})(?:-(\d{3}))?Z$/);
+  return m ? `${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5] ?? "000"}Z` : null;
+}
+
 // src/shared/ownership.ts
 var PROTECTED_REPO_PATHS = [/^\.github\//, /^\.gitlab-ci\.yml$/, /^CODEOWNERS$/, /^\.gitlab\/CODEOWNERS$/];
 var ROOT_OWNED_FILES = /* @__PURE__ */ new Set(["workspace.json", "people.json", ".gitignore", ".gitattributes"]);
@@ -77,6 +144,11 @@ function checkChanges(changes, ctx) {
       }
       continue;
     }
+    if (base?.role === "discussion" && segments[2] === THREADS_DIR && segments.length === 5) {
+      const reason = checkDiscussionPost(change, segments, ctx);
+      if (reason) deny(path2, reason.text, reason.owner);
+      continue;
+    }
     if (base) {
       if (!actsAs(ctx.author, base.owner, ctx.people)) {
         deny(path2, `This node belongs to @${base.owner}.`, base.owner);
@@ -98,6 +170,35 @@ function checkChanges(changes, ctx) {
     }
   }
   return dedupeByNode(violations, ctx.braindPrefix);
+}
+function checkDiscussionPost(change, segments, ctx) {
+  const { path: path2, kind } = change;
+  if (kind === "deleted") return { text: "Discussion posts are never deleted." };
+  if (kind === "modified") {
+    const creator = ctx.fileCreator(path2);
+    if (creator !== ctx.author) return { text: "Only the person who wrote a post can edit it.", owner: creator ?? void 0 };
+  }
+  const text = ctx.readText("head", path2) ?? "";
+  const file = segments[4];
+  if (file === QUESTION_FILE) {
+    const q = parseQuestion(text);
+    return q.from === ctx.author ? null : { text: 'Ask questions as yourself: "from" must be you.' };
+  }
+  if (aliasFromPostFile(file) !== ctx.author) {
+    return { text: `A post is named <time>-${ctx.author}.md, after its author.` };
+  }
+  const post = parseReply(file, text);
+  if (post.from !== ctx.author) return { text: 'Post as yourself: "from" must be you.' };
+  if (post.status) {
+    const questionPath = [...segments.slice(0, 4), QUESTION_FILE].join("/");
+    const full = ctx.braindPrefix + questionPath;
+    const qText = ctx.readText("base", full) ?? ctx.readText("head", full);
+    const asker = qText ? parseQuestion(qText).from : null;
+    if (asker !== ctx.author) {
+      return { text: `Only the asker${asker ? ` (@${asker})` : ""} can resolve or reopen this thread.`, owner: asker ?? void 0 };
+    }
+  }
+  return null;
 }
 function dedupeByNode(violations, braindPrefix) {
   const seen = /* @__PURE__ */ new Set();
@@ -218,7 +319,8 @@ function checkOwnership(opts) {
     fileCreator: (file) => {
       const email = gitOrNull(repo, ["log", "--diff-filter=A", "--format=%ae", "-1", baseRef, "--", file])?.trim();
       return email ? resolveAuthor(people, { email }) : null;
-    }
+    },
+    readText: (side, file) => readAt(repo, side === "base" ? base : head, file)
   };
   return { author, violations: checkChanges(changes, ctx) };
 }
@@ -244,7 +346,7 @@ function parseArgs(argv) {
   }
   return args;
 }
-function str(args, key) {
+function str2(args, key) {
   const v = args.get(key);
   if (v === true) usage(`--${key} needs a value`);
   return v;
@@ -257,15 +359,15 @@ function main() {
   if (args.has("staged")) head = { kind: "index" };
   else if (args.has("worktree")) head = { kind: "worktree" };
   else {
-    const base = str(args, "base");
-    const headRef = str(args, "head");
+    const base = str2(args, "base");
+    const headRef = str2(args, "head");
     if (!base || !headRef) usage("give --base and --head, or --staged, or --worktree");
     baseRef = base;
     head = { kind: "ref", ref: headRef };
   }
-  const workspace = (str(args, "workspace") ?? ".braind").replace(/\/+$/, "");
-  let email = str(args, "author-email");
-  const hostUsername = str(args, "author-host");
+  const workspace = (str2(args, "workspace") ?? ".braind").replace(/\/+$/, "");
+  let email = str2(args, "author-email");
+  const hostUsername = str2(args, "author-host");
   if (!email && !hostUsername) {
     try {
       email = (0, import_child_process2.execFileSync)("git", ["config", "--get", "user.email"], { cwd: repo, encoding: "utf-8" }).trim();
