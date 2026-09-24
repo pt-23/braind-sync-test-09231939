@@ -5,7 +5,7 @@
   "createdAt": "2026-09-24T00:39:42.645Z",
   "mode": "normal",
   "sync": {
-    "mode": "push",
+    "mode": "pr",
     "host": "github",
     "branch": "main"
   }
